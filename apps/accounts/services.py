@@ -57,6 +57,8 @@ class RegistrationService:
         from django.db import transaction
         from django.utils.text import slugify
 
+        from apps.accounts.models import User as UserModel
+
         from apps.workspaces.models import (
             BusinessProfile,
             Workspace,
@@ -69,7 +71,7 @@ class RegistrationService:
         )
 
         with transaction.atomic():
-            user = User.objects.create_user(
+            user = UserModel.objects.create_user(
                 email=email,
                 password=password,
                 **kwargs,
@@ -101,3 +103,36 @@ class RegistrationService:
             )
 
         return user
+
+
+class LoginService:
+    """Issues JWT token pairs for authenticated users.
+
+    Token generation is delegated to **SimpleJWT** (``RefreshToken``).
+    The caller is responsible for authentication and for passing a
+    valid, active ``User`` instance.
+    """
+
+    @staticmethod
+    def login(user: User) -> dict[str, str]:
+        """Generate an access/refresh token pair for the given *user*.
+
+        Parameters
+        ----------
+        user:
+            An already-authenticated ``User`` instance.  No credential
+            checking is performed by this method.
+
+        Returns
+        -------
+        dict[str, str]
+            A dictionary with ``"access"`` and ``"refresh"`` token
+            strings that the client can use for subsequent requests.
+        """
+        from rest_framework_simplejwt.tokens import RefreshToken
+
+        refresh = RefreshToken.for_user(user)
+        return {
+            "access": str(refresh.access_token),
+            "refresh": str(refresh),
+        }
