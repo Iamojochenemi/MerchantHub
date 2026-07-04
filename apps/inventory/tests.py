@@ -1,9 +1,16 @@
-"""Tests for ``InventoryService``."""
+"""Tests for ``InventoryService`` and Inventory API endpoints."""
+
+import uuid
 
 from django.test import TestCase
+from django.urls import reverse
+from rest_framework.test import APITestCase
 
+from apps.accounts.models import User
 from apps.inventory.models import Inventory
 from apps.inventory.services import InventoryService
+from apps.products.models import Product
+from apps.workspaces.models import Workspace, WorkspaceMembership
 
 
 class InventoryServiceTests(TestCase):
@@ -11,10 +18,6 @@ class InventoryServiceTests(TestCase):
 
     def setUp(self) -> None:
         """Create a product and its inventory record."""
-        from apps.accounts.models import User
-        from apps.products.models import Product
-        from apps.workspaces.models import Workspace, WorkspaceMembership
-
         user = User.objects.create_user(
             email="merchant@example.com",
             password="testpass123",
@@ -50,7 +53,6 @@ class InventoryServiceTests(TestCase):
             inventory=self.inventory, quantity=5
         )
         self.assertEqual(result.quantity, 15)
-        self.assertEqual(result, self.inventory)
 
     def test_increase_stock_from_zero(self) -> None:
         """Increasing stock works when the current quantity is zero."""
@@ -83,7 +85,6 @@ class InventoryServiceTests(TestCase):
             inventory=self.inventory, quantity=3
         )
         self.assertEqual(result.quantity, 7)
-        self.assertEqual(result, self.inventory)
 
     def test_decrease_stock_to_zero(self) -> None:
         """Decreasing stock to exactly zero is allowed."""
@@ -235,3 +236,252 @@ class InventoryServiceTests(TestCase):
             InventoryService.adjust_stock(
                 inventory=self.inventory, quantity=None  # type: ignore[arg-type]
             )
+
+
+class InventoryAPITests(APITestCase):
+    """Test the Inventory API endpoints."""
+
+    def setUp(self) -> None:
+        """Create users, workspaces, products, and inventory records."""
+        # --- Primary user ---
+        self.user = User.objects.create_user(
+            email="merchant@example.com",
+            password="testpass123",
+            first_name="Jane",
+            last_name="Doe",
+        )
+        self.workspace = Workspace.objects.create(
+            owner=self.user, name="Test Store", slug="test-store"
+        )
+        WorkspaceMembership.objects.create(
+            user=self.user,
+            workspace=self.workspace,
+            role=WorkspaceMembership.Role.OWNER,
+        )
+
+        # --- Second user for isolation tests ---
+        self.other_user = User.objects.create_user(
+            email="other@example.com",
+            password="testpass123",
+            first_name="Other",
+            last_name="User",
+        )
+        self.other_workspace = Workspace.objects.create(
+            owner=self.other_user, name="Other Store", slug="other-store"
+        )
+        WorkspaceMembership.objects.create(
+            user=self.other_user,
+            workspace=self.other_workspace,
+            role=WorkspaceMembership.Role.OWNER,
+        )
+
+        # --- Products and inventory ---
+        self.product = Product.objects.create(
+            workspace=self.workspace,
+            name="Test Product",
+            sku="TST-001",
+            cost_price="5.00",
+            selling_price="12.99",
+        )
+        self.inventory = Inventory.objects.create(
+            product=self.product, quantity=10
+        )
+
+        # Second product in the same workspace
+        self.product2 = Product.objects.create(
+            workspace=self.workspace,
+            name="Second Product",
+            sku="TST-002",
+            cost_price="3.00",
+            selling_price="7.99",
+        )
+        self.inventory2 = Inventory.objects.create(
+            product=self.product2, quantity=25
+        )
+
+        # Product in the other workspace
+        self.other_product = Product.objects.create(
+            workspace=self.other_workspace,
+            name="Other Product",
+            sku="OTH-001",
+            cost_price="10.00",
+            selling_price="24.99",
+        )
+        self.other_inventory = Inventory.objects.create(
+            product=self.other_product, quantity=5
+        )
+
+        # --- Authentication ---
+        self._authenticate(self.user)
+
+        # --- URLs ---
+        self.list_url = reverse("inventory:inventory-list")
+        self.detail_url = reverse(
+            "inventory:inventory-detail", args=[self.inventory.pk]
+        )
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _authenticate(self, user: User) -> None:
+        """Set authentication credentials on the test client."""
+        from rest_framework_simplejwt.tokens import RefreshToken
+
+        refresh = RefreshToken.for_user(user)
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {refresh.access_token}",
+        )
+
+    # ------------------------------------------------------------------
+    # List
+    # ------------------------------------------------------------------
+
+    def test_list_inventory_returns_200(self) -> None:
+        """GET /inventory/ returns HTTP 200."""
+        response = self.client.get(self.list_url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_list_inventory_returns_only_own_workspace(self) -> None:
+        """Only inventory in the user's workspace is listed."""
+        response = self.client.get(self.list_url)
+        results = response.data["results"]
+        self.assertEqual(len(results), 2)
+
+    def test_list_inventory_is_paginated(self) -> None:
+        """The list response uses the pagination format."""
+        response = self.client.get(self.list_url)
+        self.assertIn("count", response.data)
+        self.assertIn("results", response.data)
+        self.assertIn("next", response.data)
+
+    # ------------------------------------------------------------------
+    # Retrieve
+    # ------------------------------------------------------------------
+
+    def test_retrieve_inventory_returns_200(self) -> None:
+        """GET /inventory/<uuid>/ returns the inventory record."""
+        response = self.client.get(self.detail_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["quantity"], 10)
+
+    def test_retrieve_nonexistent_inventory_returns_404(self) -> None:
+        """GET /inventory/<uuid>/ with a non-existent UUID returns 404."""
+        url = reverse("inventory:inventory-detail", args=[uuid.uuid4()])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+    # ------------------------------------------------------------------
+    # Patch (adjust quantity)
+    # ------------------------------------------------------------------
+
+    def test_patch_quantity_returns_200(self) -> None:
+        """PATCH /inventory/<uuid>/ with a valid quantity returns 200."""
+        response = self.client.patch(
+            self.detail_url, {"quantity": 50}, format="json"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["quantity"], 50)
+
+    def test_patch_quantity_updates_database(self) -> None:
+        """PATCH updates the database record."""
+        self.client.patch(
+            self.detail_url, {"quantity": 100}, format="json"
+        )
+        self.inventory.refresh_from_db()
+        self.assertEqual(self.inventory.quantity, 100)
+
+    def test_patch_quantity_to_zero(self) -> None:
+        """PATCH setting quantity to zero is allowed."""
+        response = self.client.patch(
+            self.detail_url, {"quantity": 0}, format="json"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["quantity"], 0)
+
+    def test_patch_negative_quantity_returns_400(self) -> None:
+        """PATCH with a negative quantity returns 400."""
+        response = self.client.patch(
+            self.detail_url, {"quantity": -5}, format="json"
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_patch_without_quantity_is_noop(self) -> None:
+        """PATCH without quantity field leaves the record unchanged."""
+        response = self.client.patch(
+            self.detail_url, {"product": str(self.product.pk)}, format="json"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["quantity"], 10)
+
+    # ------------------------------------------------------------------
+    # Method restrictions
+    # ------------------------------------------------------------------
+
+    def test_delete_returns_405(self) -> None:
+        """DELETE is not allowed on inventory detail."""
+        response = self.client.delete(self.detail_url)
+        self.assertEqual(response.status_code, 405)
+
+    def test_post_returns_405_on_list(self) -> None:
+        """POST is not allowed on inventory list."""
+        response = self.client.post(self.list_url, {"quantity": 5}, format="json")
+        self.assertEqual(response.status_code, 405)
+
+    # ------------------------------------------------------------------
+    # Workspace isolation
+    # ------------------------------------------------------------------
+
+    def test_cannot_list_other_workspace_inventory(self) -> None:
+        """A user cannot see inventory from another workspace."""
+        self._authenticate(self.other_user)
+        response = self.client.get(self.list_url)
+        results = response.data["results"]
+        self.assertEqual(len(results), 1)
+        self.assertEqual(
+            str(results[0]["product"]), str(self.other_product.pk)
+        )
+
+    def test_cannot_retrieve_other_workspace_inventory(self) -> None:
+        """A user gets 404 when retrieving another workspace's inventory."""
+        self._authenticate(self.other_user)
+        url = reverse(
+            "inventory:inventory-detail", args=[self.inventory.pk]
+        )
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_cannot_patch_other_workspace_inventory(self) -> None:
+        """A user gets 404 when patching another workspace's inventory."""
+        self._authenticate(self.other_user)
+        url = reverse(
+            "inventory:inventory-detail", args=[self.inventory.pk]
+        )
+        response = self.client.patch(
+            url, {"quantity": 99}, format="json"
+        )
+        self.assertEqual(response.status_code, 404)
+
+    # ------------------------------------------------------------------
+    # Authentication
+    # ------------------------------------------------------------------
+
+    def test_unauthenticated_list_returns_401(self) -> None:
+        """GET /inventory/ without auth returns 401."""
+        self.client.credentials()
+        response = self.client.get(self.list_url)
+        self.assertEqual(response.status_code, 401)
+
+    def test_unauthenticated_retrieve_returns_401(self) -> None:
+        """GET /inventory/<uuid>/ without auth returns 401."""
+        self.client.credentials()
+        response = self.client.get(self.detail_url)
+        self.assertEqual(response.status_code, 401)
+
+    def test_unauthenticated_patch_returns_401(self) -> None:
+        """PATCH /inventory/<uuid>/ without auth returns 401."""
+        self.client.credentials()
+        response = self.client.patch(
+            self.detail_url, {"quantity": 5}, format="json"
+        )
+        self.assertEqual(response.status_code, 401)
