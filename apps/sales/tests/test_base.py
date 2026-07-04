@@ -1,9 +1,10 @@
-"""Tests for the Sale and SaleItem models and SalesService."""
+"""Tests for the Sale and SaleItem models, SalesService, and serializers."""
 
 from decimal import Decimal
 
 from django.db import IntegrityError
 from django.test import TestCase
+from rest_framework.test import APITestCase
 
 from apps.accounts.models import User
 from apps.inventory.models import Inventory
@@ -289,7 +290,6 @@ class SalesServiceTests(TestCase):
             role=WorkspaceMembership.Role.OWNER,
         )
 
-        # --- Products in the primary workspace ---
         self.product_a = Product.objects.create(
             workspace=self.workspace,
             name="Product A",
@@ -305,7 +305,6 @@ class SalesServiceTests(TestCase):
             selling_price="14.99",
         )
 
-        # --- Inventory records ---
         self.inv_a = Inventory.objects.create(
             product=self.product_a, quantity=20
         )
@@ -313,7 +312,6 @@ class SalesServiceTests(TestCase):
             product=self.product_b, quantity=15
         )
 
-        # --- Product in a different workspace ---
         self.other_workspace = Workspace.objects.create(
             owner=self.user, name="Other Store", slug="other-store"
         )
@@ -326,7 +324,6 @@ class SalesServiceTests(TestCase):
         )
         Inventory.objects.create(product=self.other_product, quantity=10)
 
-        # --- Product without an inventory record ---
         self.no_inv_product = Product.objects.create(
             workspace=self.workspace,
             name="No Inventory",
@@ -334,10 +331,6 @@ class SalesServiceTests(TestCase):
             cost_price="1.00",
             selling_price="5.00",
         )
-
-    # ------------------------------------------------------------------
-    # Successful sale
-    # ------------------------------------------------------------------
 
     def test_create_sale_creates_sale_and_items(self) -> None:
         """A valid sale creates a Sale with the correct totals."""
@@ -352,8 +345,6 @@ class SalesServiceTests(TestCase):
         self.assertIsNotNone(sale.pk)
         self.assertEqual(sale.workspace, self.workspace)
         self.assertEqual(sale.created_by, self.user)
-
-        # Verify totals: (2 × 9.99) + (3 × 14.99) = 19.98 + 44.97 = 64.95
         self.assertEqual(sale.subtotal, Decimal("64.95"))
         self.assertEqual(sale.total, Decimal("64.95"))
 
@@ -371,7 +362,6 @@ class SalesServiceTests(TestCase):
 
     def test_create_sale_uses_db_price_not_client_value(self) -> None:
         """The unit_price comes from the database, never the client."""
-        # The service only accepts product and quantity — no price input.
         sale = SalesService.create_sale(
             workspace=self.workspace,
             created_by=self.user,
@@ -389,10 +379,6 @@ class SalesServiceTests(TestCase):
         )
         self.inv_a.refresh_from_db()
         self.assertEqual(self.inv_a.quantity, 17)
-
-    # ------------------------------------------------------------------
-    # Insufficient stock
-    # ------------------------------------------------------------------
 
     def test_create_sale_insufficient_stock_raises_error(self) -> None:
         """A sale that would oversell raises ValidationError."""
@@ -442,10 +428,6 @@ class SalesServiceTests(TestCase):
         self.inv_a.refresh_from_db()
         self.assertEqual(self.inv_a.quantity, original_qty)
 
-    # ------------------------------------------------------------------
-    # Wrong workspace
-    # ------------------------------------------------------------------
-
     def test_create_sale_wrong_workspace_raises_error(self) -> None:
         """A product from a different workspace raises ValidationError."""
         from rest_framework.exceptions import ValidationError
@@ -472,10 +454,6 @@ class SalesServiceTests(TestCase):
             pass
 
         self.assertEqual(Sale.objects.count(), 0)
-
-    # ------------------------------------------------------------------
-    # Invalid quantity
-    # ------------------------------------------------------------------
 
     def test_create_sale_zero_quantity_raises_error(self) -> None:
         """A quantity of zero raises ValidationError."""
@@ -514,10 +492,6 @@ class SalesServiceTests(TestCase):
 
         self.assertEqual(Sale.objects.count(), 0)
 
-    # ------------------------------------------------------------------
-    # Missing inventory
-    # ------------------------------------------------------------------
-
     def test_create_sale_no_inventory_record_raises_error(self) -> None:
         """A product without an inventory record raises ValidationError."""
         from rest_framework.exceptions import ValidationError
@@ -548,3 +522,215 @@ class SalesServiceTests(TestCase):
             pass
 
         self.assertEqual(Sale.objects.count(), 0)
+
+
+# ======================================================================
+# Serializer tests
+# ======================================================================
+
+
+class SaleSerializerTests(APITestCase):
+    """Verify ``SaleSerializer`` input validation and output format."""
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(
+            email="merchant@example.com",
+            password="testpass123",
+            first_name="Jane",
+            last_name="Doe",
+        )
+        self.workspace = Workspace.objects.create(
+            owner=self.user, name="Test Store", slug="test-store"
+        )
+        WorkspaceMembership.objects.create(
+            user=self.user,
+            workspace=self.workspace,
+            role=WorkspaceMembership.Role.OWNER,
+        )
+
+        self.product = Product.objects.create(
+            workspace=self.workspace,
+            name="Test Product",
+            sku="TST-001",
+            cost_price="5.00",
+            selling_price="12.99",
+        )
+        Inventory.objects.create(product=self.product, quantity=10)
+
+        from rest_framework.test import APIRequestFactory
+
+        factory = APIRequestFactory()
+        self.request = factory.post("/api/v1/sales/")
+        self.request.user = self.user
+
+    def _get_context(self) -> dict:
+        return {"request": self.request}
+
+    def test_valid_payload_accepts_items(self) -> None:
+        """A valid payload with items passes serializer validation."""
+        from apps.sales.serializers import SaleSerializer
+
+        serializer = SaleSerializer(
+            data={
+                "items": [
+                    {"product": self.product.pk, "quantity": 2},
+                ],
+            },
+            context=self._get_context(),
+        )
+        self.assertTrue(serializer.is_valid(), msg=serializer.errors)
+
+    def test_valid_payload_rejects_extra_fields(self) -> None:
+        """``workspace``, ``created_by``, ``subtotal``, ``total`` are ignored."""
+        from apps.sales.serializers import SaleSerializer
+
+        serializer = SaleSerializer(
+            data={
+                "items": [{"product": self.product.pk, "quantity": 1}],
+                "workspace": str(self.workspace.pk),
+                "created_by": str(self.user.pk),
+                "subtotal": "100.00",
+                "total": "100.00",
+            },
+            context=self._get_context(),
+        )
+        self.assertTrue(serializer.is_valid(), msg=serializer.errors)
+
+    def test_empty_items_returns_error(self) -> None:
+        """An empty items list fails validation."""
+        from apps.sales.serializers import SaleSerializer
+
+        serializer = SaleSerializer(
+            data={"items": []},
+            context=self._get_context(),
+        )
+        self.assertFalse(serializer.is_valid())
+
+    def test_missing_items_returns_error(self) -> None:
+        """Omitting items entirely fails validation."""
+        from apps.sales.serializers import SaleSerializer
+
+        serializer = SaleSerializer(
+            data={},
+            context=self._get_context(),
+        )
+        self.assertFalse(serializer.is_valid())
+
+    def test_item_without_product_returns_error(self) -> None:
+        """An item dict without a product fails validation."""
+        from apps.sales.serializers import SaleSerializer
+
+        serializer = SaleSerializer(
+            data={"items": [{"quantity": 1}]},
+            context=self._get_context(),
+        )
+        self.assertFalse(serializer.is_valid())
+
+    def test_item_without_quantity_returns_error(self) -> None:
+        """An item dict without a quantity fails validation."""
+        from apps.sales.serializers import SaleSerializer
+
+        serializer = SaleSerializer(
+            data={"items": [{"product": self.product.pk}]},
+            context=self._get_context(),
+        )
+        self.assertFalse(serializer.is_valid())
+
+    def test_item_zero_quantity_returns_error(self) -> None:
+        """A quantity of zero fails validation."""
+        from apps.sales.serializers import SaleSerializer
+
+        serializer = SaleSerializer(
+            data={
+                "items": [{"product": self.product.pk, "quantity": 0}],
+            },
+            context=self._get_context(),
+        )
+        self.assertFalse(serializer.is_valid())
+
+    def test_item_negative_quantity_returns_error(self) -> None:
+        """A negative quantity fails validation."""
+        from apps.sales.serializers import SaleSerializer
+
+        serializer = SaleSerializer(
+            data={
+                "items": [{"product": self.product.pk, "quantity": -1}],
+            },
+            context=self._get_context(),
+        )
+        self.assertFalse(serializer.is_valid())
+
+    def test_item_nonexistent_product_returns_error(self) -> None:
+        """A non-existent product UUID fails validation."""
+        import uuid
+
+        from apps.sales.serializers import SaleSerializer
+
+        serializer = SaleSerializer(
+            data={
+                "items": [
+                    {"product": uuid.uuid4(), "quantity": 1},
+                ],
+            },
+            context=self._get_context(),
+        )
+        self.assertFalse(serializer.is_valid())
+
+    def test_serialized_output_contains_expected_fields(self) -> None:
+        """The serialized output includes id, subtotal, total, timestamps, items."""
+        from apps.sales.serializers import SaleSerializer
+
+        sale = SalesService.create_sale(
+            workspace=self.workspace,
+            created_by=self.user,
+            items=[{"product": self.product, "quantity": 2}],
+        )
+
+        serializer = SaleSerializer(
+            instance=sale, context=self._get_context()
+        )
+        data = serializer.data
+        self.assertIn("id", data)
+        self.assertIn("subtotal", data)
+        self.assertIn("total", data)
+        self.assertIn("created_at", data)
+        self.assertIn("updated_at", data)
+        self.assertIn("items", data)
+
+    def test_serialized_output_has_correct_totals(self) -> None:
+        """Totals in the output match the computed values."""
+        from apps.sales.serializers import SaleSerializer
+
+        sale = SalesService.create_sale(
+            workspace=self.workspace,
+            created_by=self.user,
+            items=[{"product": self.product, "quantity": 3}],
+        )
+
+        serializer = SaleSerializer(
+            instance=sale, context=self._get_context()
+        )
+        data = serializer.data
+        self.assertEqual(Decimal(data["subtotal"]), Decimal("38.97"))
+        self.assertEqual(Decimal(data["total"]), Decimal("38.97"))
+
+    def test_serialized_items_contain_line_item_fields(self) -> None:
+        """Each item in the output has product, quantity, unit_price, line_total."""
+        from apps.sales.serializers import SaleSerializer
+
+        sale = SalesService.create_sale(
+            workspace=self.workspace,
+            created_by=self.user,
+            items=[{"product": self.product, "quantity": 2}],
+        )
+
+        serializer = SaleSerializer(
+            instance=sale, context=self._get_context()
+        )
+        items = serializer.data["items"]
+        self.assertEqual(len(items), 1)
+        item = items[0]
+        self.assertIn("product", item)
+        self.assertEqual(item["quantity"], 2)
+        self.assertEqual(Decimal(item["unit_price"]), Decimal("12.99"))
+        self.assertEqual(Decimal(item["line_total"]), Decimal("25.98"))
