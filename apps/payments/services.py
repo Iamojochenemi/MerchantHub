@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from django.db import transaction
 from rest_framework.exceptions import ValidationError
 
 if TYPE_CHECKING:
@@ -88,40 +89,41 @@ class PaymentService:
         """
         from apps.payments.models import Payment
 
-        # --- Workspace consistency ---
-        if sale.workspace_id != workspace.pk:
-            raise ValidationError(
-                "The sale does not belong to the specified workspace."
+        with transaction.atomic():
+            # --- Workspace consistency ---
+            if sale.workspace_id != workspace.pk:
+                raise ValidationError(
+                    "The sale does not belong to the specified workspace."
+                )
+
+            # --- Customer workspace consistency ---
+            if customer is not None and customer.workspace_id != workspace.pk:
+                raise ValidationError(
+                    "The customer does not belong to the specified workspace."
+                )
+
+            # --- Amount must be positive ---
+            if amount is None or amount <= 0:
+                raise ValidationError(
+                    "Payment amount must be positive."
+                )
+
+            # --- Single SUCCESS per sale ---
+            if status == "SUCCESS":
+                PaymentService._ensure_no_successful_payment(sale.pk)
+
+            payment = Payment.objects.create(
+                workspace=workspace,
+                sale=sale,
+                customer=customer,
+                amount=amount,
+                currency=currency,
+                payment_method=payment_method,
+                status=status,
+                provider_reference=provider_reference,
+                external_reference=external_reference,
+                notes=notes,
             )
-
-        # --- Customer workspace consistency ---
-        if customer is not None and customer.workspace_id != workspace.pk:
-            raise ValidationError(
-                "The customer does not belong to the specified workspace."
-            )
-
-        # --- Amount must be positive ---
-        if amount is None or amount <= 0:
-            raise ValidationError(
-                "Payment amount must be positive."
-            )
-
-        # --- Single SUCCESS per sale ---
-        if status == "SUCCESS":
-            PaymentService._ensure_no_successful_payment(sale.pk)
-
-        payment = Payment.objects.create(
-            workspace=workspace,
-            sale=sale,
-            customer=customer,
-            amount=amount,
-            currency=currency,
-            payment_method=payment_method,
-            status=status,
-            provider_reference=provider_reference,
-            external_reference=external_reference,
-            notes=notes,
-        )
         return payment
 
     @staticmethod
@@ -160,33 +162,34 @@ class PaymentService:
         """
         from apps.payments.models import Payment
 
-        allowed_transitions = {
-            Payment.Status.PENDING: [
-                Payment.Status.SUCCESS,
-                Payment.Status.FAILED,
-            ],
-            Payment.Status.SUCCESS: [Payment.Status.REFUNDED],
-            Payment.Status.FAILED: [Payment.Status.SUCCESS],
-        }
+        with transaction.atomic():
+            allowed_transitions = {
+                Payment.Status.PENDING: [
+                    Payment.Status.SUCCESS,
+                    Payment.Status.FAILED,
+                ],
+                Payment.Status.SUCCESS: [Payment.Status.REFUNDED],
+                Payment.Status.FAILED: [Payment.Status.SUCCESS],
+            }
 
-        allowed_next = allowed_transitions.get(payment.status, [])
+            allowed_next = allowed_transitions.get(payment.status, [])
 
-        if new_status not in allowed_next:
-            raise ValidationError(
-                f"Cannot transition from {payment.status} to {new_status}. "
-                f"Allowed transitions from {payment.status}: "
-                f"{[s.value for s in allowed_next]}."
-            )
+            if new_status not in allowed_next:
+                raise ValidationError(
+                    f"Cannot transition from {payment.status} to {new_status}. "
+                    f"Allowed transitions from {payment.status}: "
+                    f"{[s.value for s in allowed_next]}."
+                )
 
-        # --- Enforce single SUCCESS per sale ---
-        if new_status == "SUCCESS":
-            PaymentService._ensure_no_successful_payment(
-                payment.sale_id,
-                exclude_pk=payment.pk,
-            )
+            # --- Enforce single SUCCESS per sale ---
+            if new_status == "SUCCESS":
+                PaymentService._ensure_no_successful_payment(
+                    payment.sale_id,
+                    exclude_pk=payment.pk,
+                )
 
-        payment.status = new_status
-        payment.save(update_fields=["status", "updated_at"])
+            payment.status = new_status
+            payment.save(update_fields=["status", "updated_at"])
         return payment
 
     @staticmethod
