@@ -96,7 +96,7 @@ class NombaClient:
         Parameters
         ----------
         path:
-            The URL path relative to ``base_url`` (e.g. ``/auth/token/issue``).
+            The URL path relative to ``base_url`` (e.g. ``/v1/auth/token/issue``).
         json:
             Optional JSON-serialisable request body.
         headers:
@@ -121,6 +121,9 @@ class NombaClient:
     def close(self) -> None:
         """Close the underlying HTTP session and release resources."""
         self._session.close()
+
+    def __del__(self) -> None:
+        self.close()
 
     # ------------------------------------------------------------------
     # Response helpers
@@ -212,10 +215,6 @@ class NombaClient:
         except requests.exceptions.ConnectionError as exc:
             raise NombaConnectionError(
                 f"Could not connect to Nomba at {url}: {exc}"
-            ) from exc
-        except requests.exceptions.RequestException as exc:
-            raise NombaConnectionError(
-                f"Nomba request failed: {exc}"
             ) from exc
 
         if response.status_code in (401, 403):

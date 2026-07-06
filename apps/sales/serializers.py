@@ -69,6 +69,7 @@ class SaleSerializer(serializers.Serializer):
     """
 
     id = serializers.UUIDField(read_only=True)
+    payment_status = serializers.CharField(read_only=True)
     subtotal = serializers.DecimalField(
         max_digits=12, decimal_places=2, read_only=True
     )

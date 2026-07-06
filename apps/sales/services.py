@@ -129,6 +129,7 @@ class SalesService:
             sale = Sale.objects.create(
                 workspace=workspace,
                 created_by=created_by,
+                payment_status=Sale.PaymentStatus.PENDING_PAYMENT,
                 subtotal=subtotal,
                 total=total,
             )

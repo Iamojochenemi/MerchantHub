@@ -1,15 +1,26 @@
 """
-Comprehensive unit tests for ``NombaAuthService``.
+Comprehensive unit tests for ``NombaAuthService`` and ``NombaAuthResult``.
 
 All HTTP-level interactions are mocked — no real network calls are
-made.  Covers every error path defined in the authentication flow:
+made.  The mock response bodies are designed to match the **real**
+Nomba sandbox API response schema (discovered empirically and
+confirmed by the official documentation).
 
-- Successful token retrieval
-- Authentication failure (HTTP 401/403)
-- Timeout
-- Connection failure (DNS / network)
-- Malformed (non-JSON) response body
-- Unexpected HTTP error (500)
+Test coverage
+-------------
+- Configuration validation (missing settings)
+- Successful authentication (realistic Nomba response including the
+  unreliable ``"status": false`` field that must **not** block success)
+- Authentication failure via HTTP 401/403 (``NombaClient`` layer)
+- Authentication failure via Nomba error ``code`` (e.g. ``"96"``)
+- Network timeout
+- DNS / connection failure
+- Malformed JSON response body
+- Missing ``data`` envelope in response
+- Missing ``access_token`` inside ``data``
+- Response body that is not a JSON object
+- Unexpected HTTP 500
+- ``NombaClient.parse_json`` (valid JSON / malformed JSON)
 """
 
 from __future__ import annotations
@@ -20,7 +31,11 @@ from django.test import SimpleTestCase, override_settings
 
 import requests
 
-from apps.payments.integrations.nomba.auth import NombaAuthService
+from apps.payments.integrations.nomba.auth import (
+    NombaAuthResult,
+    NombaAuthService,
+)
+from apps.payments.integrations.nomba.client import NombaClient
 from apps.payments.integrations.nomba.exceptions import (
     NombaAuthenticationError,
     NombaConnectionError,
@@ -30,11 +45,31 @@ from apps.payments.integrations.nomba.exceptions import (
 
 # Minimal settings required for NombaAuthService to initialise.
 NOMBA_SETTINGS = {
-    "NOMBA_BASE_URL": "https://api.nomba.com",
+    "NOMBA_BASE_URL": "https://sandbox.nomba.com",
     "NOMBA_CLIENT_ID": "test-client-id",
     "NOMBA_CLIENT_SECRET": "test-client-secret",
     "NOMBA_ACCOUNT_ID": "test-account-id",
 }
+
+# A realistic Nomba success response body (observed from the real
+# sandbox environment).  Note that ``"status": false`` appears even
+# on a successful authentication — it is not a reliable indicator.
+_REAL_SUCCESS_BODY = {
+    "code": "00",
+    "description": "Successful",
+    "status": False,
+    "data": {
+        "access_token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dummy",
+        "refresh_token": "01h4gdx2tctxfjgacbdwrcvs5d1688473602892",
+        "businessId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "expiresAt": "2026-07-07T12:00:00Z",
+    },
+}
+
+_SUCCESS_TOKEN = _REAL_SUCCESS_BODY["data"]["access_token"]
+_SUCCESS_REFRESH = _REAL_SUCCESS_BODY["data"]["refresh_token"]
+_SUCCESS_BUSINESS_ID = _REAL_SUCCESS_BODY["data"]["businessId"]
+_SUCCESS_EXPIRES_AT = _REAL_SUCCESS_BODY["data"]["expiresAt"]
 
 
 def _fake_response(
@@ -62,7 +97,6 @@ def _fake_response(
         resp._content = json.dumps(json_data).encode("utf-8")
     else:
         resp._content = text.encode("utf-8")
-    # Make ``.ok`` return the correct value.
     resp.raw = None  # type: ignore[attr-defined]
     return resp
 
@@ -101,7 +135,7 @@ class NombaAuthServiceConfigTests(SimpleTestCase):
     def test_valid_config_succeeds(self) -> None:
         """Init succeeds when all settings are populated."""
         auth = NombaAuthService()
-        self.assertEqual(auth._base_url, "https://api.nomba.com")
+        self.assertEqual(auth._base_url, "https://sandbox.nomba.com")
         self.assertEqual(auth._client_id, "test-client-id")
         self.assertEqual(auth._client_secret, "test-client-secret")
         self.assertEqual(auth._account_id, "test-account-id")
@@ -122,35 +156,34 @@ class NombaAuthServiceTokenTests(SimpleTestCase):
 
     @patch.object(NombaAuthService, "_client", create=True)
     def test_successful_authentication(self, mock_client: object) -> None:
-        """A valid token response returns the parsed JSON body."""
+        """A valid Nomba response returns ``NombaAuthResult`` with the
+        expected fields, even when ``"status": false`` is present."""
         from unittest.mock import Mock
 
         mock_response = Mock(spec=requests.Response)
         mock_response.status_code = 200
         mock_response.ok = True
-        mock_response.json.return_value = {
-            "access_token": "eyJhbGci...",
-            "token_type": "Bearer",
-            "expires_in": 3600,
-            "account_id": "test-account-id",
-        }
+        mock_response.json.return_value = _REAL_SUCCESS_BODY
 
         mock_client.post.return_value = mock_response
-        mock_client.parse_json = lambda r: r.json()
 
         auth = NombaAuthService()
-        # Replace the real client with our mock.
         auth._client = mock_client  # type: ignore[assignment]
 
-        result = auth.get_access_token()
+        result: NombaAuthResult = auth.get_access_token()
 
-        self.assertEqual(result["access_token"], "eyJhbGci...")
-        self.assertEqual(result["token_type"], "Bearer")
-        self.assertEqual(result["expires_in"], 3600)
+        self.assertIsInstance(result, NombaAuthResult)
+        self.assertEqual(result.access_token, _SUCCESS_TOKEN)
+        self.assertEqual(result.refresh_token, _SUCCESS_REFRESH)
+        self.assertEqual(result.business_id, _SUCCESS_BUSINESS_ID)
+        self.assertEqual(result.expires_at, _SUCCESS_EXPIRES_AT)
+        # raw_response must contain the full envelope for debugging.
+        self.assertEqual(result.raw_response, _REAL_SUCCESS_BODY)
+
         mock_client.post.assert_called_once()
 
     # ------------------------------------------------------------------
-    # Authentication failure (401 / 403)
+    # Authentication failure (401 / 403) — client layer
     # ------------------------------------------------------------------
 
     @patch.object(NombaAuthService, "_client", create=True)
@@ -170,30 +203,156 @@ class NombaAuthServiceTokenTests(SimpleTestCase):
         with self.assertRaises(NombaAuthenticationError):
             auth.get_access_token()
 
+    # ------------------------------------------------------------------
+    # Authentication failure via Nomba error code
+    # ------------------------------------------------------------------
+
     @patch.object(NombaAuthService, "_client", create=True)
-    def test_authentication_failure_via_error_body(
+    def test_authentication_failure_via_error_code(
         self, mock_client: object
     ) -> None:
-        """A 2xx response with an error body raises ``NombaAuthenticationError``."""
+        """A 2xx response with ``code != "00"`` raises
+        ``NombaAuthenticationError``."""
         from unittest.mock import Mock
 
         mock_response = Mock(spec=requests.Response)
         mock_response.status_code = 200
         mock_response.ok = True
         mock_response.json.return_value = {
-            "status": False,
-            "error": "invalid_client",
-            "message": "Invalid client credentials",
+            "code": "96",
+            "description": "Invalid client credentials",
         }
 
         mock_client.post.return_value = mock_response
-        mock_client.parse_json = lambda r: r.json()
 
         auth = NombaAuthService()
         auth._client = mock_client  # type: ignore[assignment]
 
-        with self.assertRaises(NombaAuthenticationError):
+        with self.assertRaises(NombaAuthenticationError) as cm:
             auth.get_access_token()
+
+        self.assertIn("code='96'", str(cm.exception))
+        self.assertIn("Invalid client credentials", str(cm.exception))
+
+    # ------------------------------------------------------------------
+    # Missing "code" field (defensive)
+    # ------------------------------------------------------------------
+
+    @patch.object(NombaAuthService, "_client", create=True)
+    def test_missing_code_field_raises_authentication_error(
+        self, mock_client: object
+    ) -> None:
+        """A 2xx response without a ``code`` field raises
+        ``NombaAuthenticationError``."""
+        from unittest.mock import Mock
+
+        mock_response = Mock(spec=requests.Response)
+        mock_response.status_code = 200
+        mock_response.ok = True
+        mock_response.json.return_value = {
+            "description": "Something went wrong",
+        }
+
+        mock_client.post.return_value = mock_response
+
+        auth = NombaAuthService()
+        auth._client = mock_client  # type: ignore[assignment]
+
+        with self.assertRaises(NombaAuthenticationError) as cm:
+            auth.get_access_token()
+
+        self.assertIn("code=None", str(cm.exception))
+
+    # ------------------------------------------------------------------
+    # Missing "data" envelope
+    # ------------------------------------------------------------------
+
+    @patch.object(NombaAuthService, "_client", create=True)
+    def test_missing_data_envelope_raises_invalid_response_error(
+        self, mock_client: object
+    ) -> None:
+        """A 2xx response with ``code="00"`` but no ``data`` raises
+        ``NombaInvalidResponseError``."""
+        from unittest.mock import Mock
+
+        mock_response = Mock(spec=requests.Response)
+        mock_response.status_code = 200
+        mock_response.ok = True
+        mock_response.json.return_value = {
+            "code": "00",
+            "description": "Success",
+        }
+
+        mock_client.post.return_value = mock_response
+
+        auth = NombaAuthService()
+        auth._client = mock_client  # type: ignore[assignment]
+
+        with self.assertRaises(NombaInvalidResponseError) as cm:
+            auth.get_access_token()
+
+        self.assertIn("data", str(cm.exception))
+
+    # ------------------------------------------------------------------
+    # Missing "access_token" inside data
+    # ------------------------------------------------------------------
+
+    @patch.object(NombaAuthService, "_client", create=True)
+    def test_missing_access_token_raises_invalid_response_error(
+        self, mock_client: object
+    ) -> None:
+        """A response with ``data`` but no ``access_token`` raises
+        ``NombaInvalidResponseError``."""
+        from unittest.mock import Mock
+
+        mock_response = Mock(spec=requests.Response)
+        mock_response.status_code = 200
+        mock_response.ok = True
+        mock_response.json.return_value = {
+            "code": "00",
+            "description": "Success",
+            "data": {
+                "refresh_token": "abc",
+                "businessId": "def",
+                "expiresAt": "2026-07-07T12:00:00Z",
+            },
+        }
+
+        mock_client.post.return_value = mock_response
+
+        auth = NombaAuthService()
+        auth._client = mock_client  # type: ignore[assignment]
+
+        with self.assertRaises(NombaInvalidResponseError) as cm:
+            auth.get_access_token()
+
+        self.assertIn("access_token", str(cm.exception))
+
+    # ------------------------------------------------------------------
+    # Body is not a JSON object (e.g. a JSON array)
+    # ------------------------------------------------------------------
+
+    @patch.object(NombaAuthService, "_client", create=True)
+    def test_body_is_not_a_dict_raises_invalid_response_error(
+        self, mock_client: object
+    ) -> None:
+        """A JSON array response raises ``NombaInvalidResponseError``."""
+        from unittest.mock import Mock
+
+        mock_response = Mock(spec=requests.Response)
+        mock_response.status_code = 200
+        mock_response.ok = True
+        mock_response.json.return_value = ["not", "a", "dict"]
+
+        mock_client.post.return_value = mock_response
+
+        auth = NombaAuthService()
+        auth._client = mock_client  # type: ignore[assignment]
+
+        with self.assertRaises(NombaInvalidResponseError) as cm:
+            auth.get_access_token()
+
+        self.assertIn("not a json object", str(cm.exception).lower())
 
     # ------------------------------------------------------------------
     # Timeout
@@ -276,7 +435,7 @@ class NombaAuthServiceTokenTests(SimpleTestCase):
         from unittest.mock import Mock
 
         mock_client.post.side_effect = NombaRequestError(
-            "Nomba returned HTTP 500 for POST /auth/token/issue",
+            "Nomba returned HTTP 500 for POST /v1/auth/token/issue",
             status_code=500,
             response_body="Internal Server Error",
         )
@@ -299,16 +458,12 @@ class NombaClientParseJsonTests(SimpleTestCase):
 
     def test_valid_json_returns_dict(self) -> None:
         """``parse_json`` returns the parsed dict for valid JSON."""
-        from apps.payments.integrations.nomba.client import NombaClient
-
         resp = _fake_response(200, {"key": "value"})
         result = NombaClient.parse_json(resp)
         self.assertEqual(result, {"key": "value"})
 
     def test_malformed_json_raises_invalid_response_error(self) -> None:
         """``parse_json`` raises ``NombaInvalidResponseError`` for bad JSON."""
-        from apps.payments.integrations.nomba.client import NombaClient
-
         resp = _fake_response(200, text="not-json")
         with self.assertRaises(NombaInvalidResponseError):
             NombaClient.parse_json(resp)

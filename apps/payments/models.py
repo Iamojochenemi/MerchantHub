@@ -1,10 +1,8 @@
 """
-Payment model for MerchantHub.
+Payment and webhook event models for MerchantHub.
 
-Records every payment received for a sale. Designed so that
-integrating Nomba (or any other PSP) later only requires calling
-``PaymentService.update_payment_status()`` after a successful
-verification callback.
+Records every payment received for a sale and tracks processed
+webhook events for idempotent handling.
 """
 
 import uuid
@@ -12,6 +10,72 @@ import uuid
 from django.conf import settings
 from django.db import models
 from django.utils.translation import gettext_lazy as _
+
+
+class WebhookEvent(models.Model):
+    """
+    Tracks processed webhook events to enable idempotent handling.
+
+    Nomba (or any other provider) may deliver the same webhook
+    event more than once. This model ensures that each event ID
+    is only processed once, preventing duplicate payment updates.
+    """
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+        help_text=_("Unique identifier for this webhook event record."),
+    )
+
+    provider = models.CharField(
+        max_length=50,
+        help_text=_("Payment provider name (e.g. 'nomba')."),
+    )
+
+    event_id = models.CharField(
+        max_length=255,
+        unique=True,
+        help_text=_(
+            "Unique event identifier from the provider. Used for "
+            "idempotency — the same event_id is never processed twice."
+        ),
+    )
+
+    event_type = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text=_("The webhook event type (e.g. 'checkout.completed')."),
+    )
+
+    status = models.CharField(
+        max_length=50,
+        blank=True,
+        help_text=_("Processing status (e.g. 'processed', 'skipped')."),
+    )
+
+    payload = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=_("The raw webhook payload for audit/debugging."),
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        help_text=_("When this event was processed."),
+    )
+
+    class Meta:
+        db_table = "payments_webhook_event"
+        verbose_name = _("Webhook Event")
+        verbose_name_plural = _("Webhook Events")
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return (
+            f"Webhook {self.provider}/{self.event_type} "
+            f"({self.event_id}) [{self.status}]"
+        )
 
 
 class Payment(models.Model):
@@ -104,7 +168,8 @@ class Payment(models.Model):
         null=True,
         help_text=_(
             "External reference from the payment provider "
-            "(e.g. Nomba transaction ID)."
+            "(e.g. Nomba transaction ID). Uniqueness is enforced "
+            "via a conditional unique index (only non-NULL values)."
         ),
     )
 

@@ -238,6 +238,7 @@ NOMBA_BASE_URL = os.getenv("NOMBA_BASE_URL", "")
 NOMBA_CLIENT_ID = os.getenv("NOMBA_CLIENT_ID", "")
 NOMBA_CLIENT_SECRET = os.getenv("NOMBA_CLIENT_SECRET", "")
 NOMBA_ACCOUNT_ID = os.getenv("NOMBA_ACCOUNT_ID", "")
+NOMBA_WEBHOOK_SECRET = os.getenv("NOMBA_WEBHOOK_SECRET", "")
 
 
 # ---------------------------------------------------------------------------

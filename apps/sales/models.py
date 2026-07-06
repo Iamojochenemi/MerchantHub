@@ -17,7 +17,17 @@ class Sale(models.Model):
 
     Each sale is scoped to a ``Workspace`` and recorded by a ``User``.
     Monetary totals are stored at the sale level for fast aggregation.
+
+    The ``payment_status`` field tracks the lifecycle of the sale
+    from creation through to full payment.
     """
+
+    class PaymentStatus(models.TextChoices):
+        """Payment status of a sale."""
+
+        PENDING_PAYMENT = "PENDING_PAYMENT", _("Pending Payment")
+        PAID = "PAID", _("Paid")
+        PARTIALLY_PAID = "PARTIALLY_PAID", _("Partially Paid")
 
     id = models.UUIDField(
         primary_key=True,
@@ -37,6 +47,13 @@ class Sale(models.Model):
         on_delete=models.PROTECT,
         related_name="sales",
         help_text=_("The user who created this sale."),
+    )
+
+    payment_status = models.CharField(
+        max_length=20,
+        choices=PaymentStatus.choices,
+        default=PaymentStatus.PENDING_PAYMENT,
+        help_text=_("Whether the sale has been paid for."),
     )
 
     subtotal = models.DecimalField(
@@ -81,6 +98,7 @@ class Sale(models.Model):
             models.Index(fields=["workspace"], name="idx_sales_workspace"),
             models.Index(fields=["created_by"], name="idx_sales_created_by"),
             models.Index(fields=["created_at"], name="idx_sales_created_at"),
+            models.Index(fields=["payment_status"], name="idx_sales_payment_status"),
             models.Index(
                 fields=["workspace", "created_at"],
                 name="idx_sales_workspace_created",
@@ -88,7 +106,12 @@ class Sale(models.Model):
         ]
 
     def __str__(self) -> str:
-        return f"Sale {self.pk} — {self.total}"
+        return f"Sale {self.pk} — {self.total} [{self.payment_status}]"
+
+    @property
+    def is_paid(self) -> bool:
+        """Check if the sale has been fully paid for."""
+        return self.payment_status in (self.PaymentStatus.PAID,)
 
 
 class SaleItem(models.Model):
