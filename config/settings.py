@@ -231,6 +231,16 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 
 
 # ---------------------------------------------------------------------------
+# Nomba (third-party payment integration)
+# ---------------------------------------------------------------------------
+
+NOMBA_BASE_URL = os.getenv("NOMBA_BASE_URL", "")
+NOMBA_CLIENT_ID = os.getenv("NOMBA_CLIENT_ID", "")
+NOMBA_CLIENT_SECRET = os.getenv("NOMBA_CLIENT_SECRET", "")
+NOMBA_ACCOUNT_ID = os.getenv("NOMBA_ACCOUNT_ID", "")
+
+
+# ---------------------------------------------------------------------------
 # Default primary key field
 # ---------------------------------------------------------------------------
 
