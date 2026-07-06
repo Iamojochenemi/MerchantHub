@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from rest_framework.exceptions import ValidationError
 
 if TYPE_CHECKING:
+    from apps.accounts.models import User
     from apps.inventory.models import Inventory
 
 
@@ -24,10 +25,18 @@ class InventoryService:
     - Quantity arguments must be positive integers.
     - Stock can never become negative.
     - Only the fields that changed are written to the database.
+    - Every mutation automatically creates a ``StockMovement`` record
+      for the audit trail.
     """
 
     @staticmethod
-    def increase_stock(*, inventory: Inventory, quantity: int) -> Inventory:
+    def increase_stock(
+        *,
+        inventory: Inventory,
+        quantity: int,
+        created_by: User | None = None,
+        reference: str = "",
+    ) -> Inventory:
         """Add *quantity* units to the inventory.
 
         Parameters
@@ -36,6 +45,10 @@ class InventoryService:
             The inventory record to update.
         quantity:
             Number of units to add.  Must be a positive integer.
+        created_by:
+            Optional user who performed the restock.
+        reference:
+            Optional human-readable reference (e.g. ``"PO-001"``).
 
         Returns
         -------
@@ -49,12 +62,30 @@ class InventoryService:
         """
         InventoryService._validate_quantity(quantity)
 
+        quantity_before = inventory.quantity
         inventory.quantity += quantity
         inventory.save(update_fields=["quantity", "updated_at"])
+
+        InventoryService._record_movement(
+            inventory=inventory,
+            movement_type="RESTOCK",
+            quantity=quantity,
+            quantity_before=quantity_before,
+            quantity_after=inventory.quantity,
+            created_by=created_by,
+            reference=reference,
+        )
+
         return inventory
 
     @staticmethod
-    def decrease_stock(*, inventory: Inventory, quantity: int) -> Inventory:
+    def decrease_stock(
+        *,
+        inventory: Inventory,
+        quantity: int,
+        created_by: User | None = None,
+        reference: str = "",
+    ) -> Inventory:
         """Remove *quantity* units from the inventory.
 
         Parameters
@@ -63,6 +94,10 @@ class InventoryService:
             The inventory record to update.
         quantity:
             Number of units to remove.  Must be a positive integer.
+        created_by:
+            Optional user who performed the deduction.
+        reference:
+            Optional human-readable reference (e.g. ``"Sale #123"``).
 
         Returns
         -------
@@ -85,12 +120,30 @@ class InventoryService:
                 ),
             })
 
+        quantity_before = inventory.quantity
         inventory.quantity -= quantity
         inventory.save(update_fields=["quantity", "updated_at"])
+
+        InventoryService._record_movement(
+            inventory=inventory,
+            movement_type="SALE",
+            quantity=quantity,
+            quantity_before=quantity_before,
+            quantity_after=inventory.quantity,
+            created_by=created_by,
+            reference=reference,
+        )
+
         return inventory
 
     @staticmethod
-    def adjust_stock(*, inventory: Inventory, quantity: int) -> Inventory:
+    def adjust_stock(
+        *,
+        inventory: Inventory,
+        quantity: int,
+        created_by: User | None = None,
+        reference: str = "",
+    ) -> Inventory:
         """Set the inventory to an exact *quantity* value.
 
         This is an absolute override — the inventory quantity is
@@ -102,6 +155,10 @@ class InventoryService:
             The inventory record to update.
         quantity:
             The new stock quantity.  Must be a non-negative integer.
+        created_by:
+            Optional user who performed the adjustment.
+        reference:
+            Optional human-readable reference (e.g. ``"Manual adjustment"``).
 
         Returns
         -------
@@ -121,8 +178,20 @@ class InventoryService:
                 ),
             })
 
+        quantity_before = inventory.quantity
         inventory.quantity = quantity
         inventory.save(update_fields=["quantity", "updated_at"])
+
+        InventoryService._record_movement(
+            inventory=inventory,
+            movement_type="ADJUSTMENT",
+            quantity=quantity,
+            quantity_before=quantity_before,
+            quantity_after=inventory.quantity,
+            created_by=created_by,
+            reference=reference,
+        )
+
         return inventory
 
     # ------------------------------------------------------------------
@@ -142,3 +211,27 @@ class InventoryService:
             raise ValidationError({
                 "quantity": f"Quantity must be a positive integer, got {quantity}.",
             })
+
+    @staticmethod
+    def _record_movement(
+        *,
+        inventory: Inventory,
+        movement_type: str,
+        quantity: int,
+        quantity_before: int,
+        quantity_after: int,
+        created_by: User | None = None,
+        reference: str = "",
+    ) -> None:
+        """Persist a ``StockMovement`` record for the audit trail."""
+        from apps.stock_movements.models import StockMovement
+
+        StockMovement.objects.create(
+            inventory=inventory,
+            movement_type=movement_type,
+            quantity=quantity,
+            quantity_before=quantity_before,
+            quantity_after=quantity_after,
+            reference=reference,
+            created_by=created_by,
+        )
