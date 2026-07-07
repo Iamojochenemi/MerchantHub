@@ -1,118 +1,133 @@
 # MerchantHub
 
-> **A financial operating system for merchants, built on Nomba's commerce infrastructure.**
+> **A financial operating system for merchants, powered by Nomba's commerce infrastructure.**
 
-MerchantHub is a multi-tenant backend platform designed to help small and medium-sized businesses confidently manage their operations and finances.
+MerchantHub is a production-oriented, multi-tenant backend platform that helps small and medium-sized businesses manage inventory, customers, sales, payments, and business operations from a single source of truth.
 
-Rather than simply recording business activities, MerchantHub transforms transactions into meaningful financial insights that merchants can trust. By leveraging Nomba's commerce infrastructure, the platform aims to automate financial calculations, reconcile business activities, and provide accurate business intelligence from a single source of truth.
+Built with Django and Django REST Framework, MerchantHub combines secure authentication, workspace-based multi-tenancy, service-oriented architecture, and Nomba payment integration to provide the backend foundation for modern merchant operations.
 
 ---
 
-## Why MerchantHub?
+# Why MerchantHub?
 
-Many merchants successfully receive payments every day but still struggle to answer important business questions:
+Many merchants receive payments every day but still struggle to answer important questions like:
 
-- How much profit did I actually make today?
-- Why doesn't my cash match today's sales?
-- Which customers still owe me money?
-- How much inventory do I really have?
-- Is my business actually growing?
+* How much profit did I make today?
+* Why doesn't my cash balance match my sales?
+* Which customers still owe me money?
+* Which products are running low?
+* Is my business actually growing?
 
-Most small businesses still rely on notebooks, spreadsheets, calculators, and manual bookkeeping, making mistakes inevitable.
+Most small businesses still rely on notebooks, spreadsheets, manual bookkeeping, and disconnected tools.
 
-MerchantHub exists to eliminate that uncertainty.
+MerchantHub aims to eliminate that uncertainty by providing one centralized platform where business operations and financial data work together.
 
 ---
 
 # Vision
 
-Our vision is to become the financial operating system for merchants.
+MerchantHub is designed to become a complete financial operating system for merchants.
 
-MerchantHub helps business owners spend less time calculating numbers and more time making informed business decisions.
-
-Every transaction should increase confidence—not confusion.
+Rather than simply recording transactions, the platform transforms business activities into meaningful financial insights that help business owners make informed decisions with confidence.
 
 ---
 
-# Current MVP
+# Features
 
-The current version establishes the secure backend foundation for the platform.
+## Authentication & Security
 
-## Authentication
+* JWT Authentication
+* User Registration
+* Secure Login
+* Current User Endpoint
+* Protected API Endpoints
+* Serializer-based validation
 
-- Secure user registration
-- JWT authentication
-- Login endpoint
-- Current authenticated user endpoint
+---
 
-## Workspace Management
+## Multi-Tenant Workspace Management
 
 Every registered merchant automatically receives:
 
-- Personal business workspace
-- Business profile
-- Owner workspace membership
-- Tenant isolation
+* Personal Workspace
+* Business Profile
+* Owner Workspace Membership
+* Workspace Isolation
+* Tenant-aware data access
 
-## Developer Experience
-
-- OpenAPI documentation
-- Swagger UI
-- Service-layer architecture
-- Comprehensive automated tests
-- Serializer-based validation
+Each merchant's business data remains completely isolated from every other merchant.
 
 ---
-
-# Planned Features
 
 ## Business Operations
 
-- Product management
-- Inventory management
-- Customer management
-- Supplier management
-- Sales management
-- Purchase management
+### Products
 
-## Financial Intelligence
+* Create products
+* Update products
+* Delete products
+* Product listing
+* SKU support
 
-MerchantHub's primary focus.
+### Inventory
 
-- Revenue tracking
-- Profit calculation
-- Expense tracking
-- Cash flow monitoring
-- Outstanding debt tracking
-- Settlement reconciliation
-- Financial reports
-- Business health dashboard
+* Inventory tracking
+* Stock quantity updates
+* Stock movement history
+* Inventory endpoints
 
-## Nomba Integration
+### Customers
 
-- Payment synchronization
-- Transaction reconciliation
-- Settlement tracking
-- Commerce analytics
+* Customer management
+* Customer CRUD operations
 
-## Business Insights
+### Sales
 
-- Business performance metrics
-- Growth analytics
-- Restocking recommendations
-- AI-powered financial assistant
-- Predictive business insights
+* Sale creation
+* Multiple sale items
+* Sale tracking
+* Payment status updates
+
+### Payments
+
+* Payment recording
+* Payment verification
+* Multiple payment methods
+* Payment status management
 
 ---
 
-# Technology Stack
+# Nomba Integration
 
-- Python
-- Django
-- Django REST Framework
-- PostgreSQL
-- SimpleJWT
-- drf-spectacular (Swagger/OpenAPI)
+MerchantHub includes a dedicated integration layer for Nomba's payment infrastructure.
+
+Current capabilities include:
+
+* OAuth authentication
+* Checkout orchestration
+* Payment verification
+* Webhook processing
+* HMAC signature verification
+* Idempotent webhook handling
+* Payment reconciliation architecture
+* Service-layer payment synchronization
+
+The payment integration is designed so that all payment state transitions flow through a single source of truth, ensuring consistency across the platform.
+
+---
+
+# Dashboard & Business Intelligence
+
+MerchantHub includes dashboard endpoints that aggregate merchant business data for reporting and future financial analytics.
+
+This foundation will power:
+
+* Revenue tracking
+* Profit calculations
+* Cash flow monitoring
+* Business performance metrics
+* Growth analytics
+* Merchant insights
 
 ---
 
@@ -120,35 +135,80 @@ MerchantHub's primary focus.
 
 MerchantHub follows a layered architecture that separates responsibilities.
 
-```
-Views
-   │
-   ▼
+```text
+API Views
+    │
+    ▼
 Serializers
-   │
-   ▼
-Services
-   │
-   ▼
+    │
+    ▼
+Service Layer
+    │
+    ▼
 Models
 ```
 
-This approach keeps business logic independent from the API layer, making the project easier to test, maintain, and extend.
+Business logic is intentionally isolated inside services rather than views, making the application easier to test, maintain, and extend.
+
+---
+
+# Technology Stack
+
+* Python
+* Django
+* Django REST Framework
+* PostgreSQL
+* SimpleJWT
+* drf-spectacular (OpenAPI / Swagger)
+* Nomba API Integration
 
 ---
 
 # API Documentation
 
-Interactive API documentation is available through Swagger.
+Interactive Swagger documentation:
 
-```
+```text
 /api/docs/
 ```
 
 OpenAPI schema:
 
-```
+```text
 /api/schema/
+```
+
+---
+
+# Available API Modules
+
+* Authentication
+* Products
+* Inventory
+* Customers
+* Sales
+* Payments
+* Dashboard
+* Stock Movements
+
+---
+
+# Project Structure
+
+```text
+apps/
+├── accounts/
+├── common/
+├── customers/
+├── dashboard/
+├── inventory/
+├── payments/
+│   └── integrations/
+│       └── nomba/
+├── products/
+├── sales/
+├── stock_movements/
+└── workspaces/
 ```
 
 ---
@@ -179,7 +239,7 @@ python -m venv venv
 venv\Scripts\activate
 ```
 
-### Linux / macOS
+### Linux/macOS
 
 ```bash
 source venv/bin/activate
@@ -191,13 +251,23 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+## Configure environment variables
+
+Create a `.env` file and configure:
+
+* Django Secret Key
+* Database credentials
+* JWT settings
+* Nomba credentials
+* Webhook secret
+
 ## Apply migrations
 
 ```bash
 python manage.py migrate
 ```
 
-## Run the development server
+## Start the development server
 
 ```bash
 python manage.py runserver
@@ -207,39 +277,30 @@ python manage.py runserver
 
 # Running Tests
 
-Run the service tests
+Run the complete automated test suite:
 
 ```bash
-python manage.py test apps.accounts.tests.test_registration_service
+python manage.py test
 ```
 
-Run the API tests
-
-```bash
-python manage.py test apps.accounts.tests.test_views
-```
+MerchantHub currently includes **376 automated tests**, covering services, APIs, models, permissions, middleware, validators, integrations, and business logic.
 
 ---
 
-# Project Status
+# Code Quality
 
-🚧 Active Development
+The project includes:
 
-Current milestone:
-
-- Authentication
-- Multi-tenant workspace provisioning
-- Business profile creation
-- JWT authentication
-- API documentation
-- Automated testing
-
-Next milestone:
-
-- Inventory
-- Sales
-- Financial Intelligence
-- Nomba integration
+* Layered service architecture
+* Serializer validation
+* Custom exceptions
+* Custom permissions
+* Middleware
+* OpenAPI documentation
+* Comprehensive automated testing
+* Multi-tenant isolation
+* Payment orchestration
+* Webhook processing
 
 ---
 
@@ -247,51 +308,62 @@ Next milestone:
 
 ## Phase 1 ✅ Foundation
 
-- Authentication
-- Multi-tenant workspaces
-- Business profiles
-- Workspace memberships
-- API documentation
-- Testing
+* Authentication
+* Multi-tenancy
+* Business Profiles
+* Workspace Memberships
+* Swagger Documentation
+* Automated Testing
 
-## Phase 2 🚧 Business Operations
+## Phase 2 ✅ Merchant Operations
 
-- Products
-- Inventory
-- Sales
-- Customers
-- Suppliers
+* Products
+* Inventory
+* Customers
+* Sales
+* Payments
+* Stock Movements
 
-## Phase 3 📊 Financial Intelligence
+## Phase 3 🚧 Financial Intelligence
 
-- Profit calculations
-- Revenue tracking
-- Expense management
-- Cash flow
-- Business dashboard
+* Profit Analysis
+* Expense Tracking
+* Cash Flow
+* Revenue Analytics
+* Financial Reports
 
-## Phase 4 💳 Nomba Commerce Integration
+## Phase 4 🚧 Nomba Commerce
 
-- Payment synchronization
-- Settlement reconciliation
-- Automated bookkeeping
+* Checkout Improvements
+* Settlement Tracking
+* Payment Synchronization
+* Automated Reconciliation
 
-## Phase 5 🤖 Smart Business Intelligence
+## Phase 5 🚧 Business Intelligence
 
-- AI insights
-- Forecasting
-- Business recommendations
+* Merchant Dashboard
+* AI-powered Insights
+* Forecasting
+* Business Recommendations
+
+---
+
+# Hackathon
+
+MerchantHub was built as part of the **DevCareer × Nomba Hackathon 2026**.
+
+The project demonstrates how Nomba's payment infrastructure can serve as the foundation for a complete merchant operating system rather than a standalone payment gateway.
 
 ---
 
 # Contributing
 
-Contributions, suggestions, and feedback are welcome.
+Contributions, ideas, bug reports, and feature suggestions are welcome.
 
-Please open an issue before submitting major changes.
+Feel free to open an issue or submit a pull request.
 
 ---
 
 # License
 
-This project is currently developed as part of the **DevCareer × Nomba Hackathon 2026** and is intended for educational and demonstration purposes.
+This project was created for the **DevCareer × Nomba Hackathon 2026** and is intended for educational and demonstration purposes.
