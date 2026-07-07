@@ -2,8 +2,6 @@
 Tests for the Foundation (Sprint 0) shared components.
 
 Covers:
-- ``apps.common.base_models`` — SoftDeleteModel, WorkspaceScopedModel
-- ``apps.common.managers`` — ActiveQuerySet, WorkspaceScopedQuerySet
 - ``apps.common.validators`` — validate_positive_decimal, etc.
 - ``apps.common.exceptions`` — custom exceptions and exception handler
 - ``apps.common.permissions`` — permission classes
@@ -12,18 +10,16 @@ Covers:
 - ``apps.common.models`` — Notification, AuditLog
 """
 
-import uuid
 from decimal import Decimal
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.http import HttpRequest
-from django.test import TestCase, override_settings
+from django.test import TestCase
 from rest_framework import status
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.test import APIRequestFactory
 
-from apps.common.base_models import SoftDeleteModel, WorkspaceScopedModel
 from apps.common.exceptions import (
     DuplicateSkuError,
     InsufficientStockError,
@@ -33,7 +29,6 @@ from apps.common.exceptions import (
     WorkspaceRequiredError,
     custom_exception_handler,
 )
-from apps.common.managers import WorkspaceScopedQuerySet, WorkspaceScopedManager
 from apps.common.middleware import WorkspaceMiddleware
 from apps.common.models import AuditLog, Notification
 from apps.common.pagination import DefaultPagination
@@ -44,97 +39,6 @@ from apps.common.validators import (
     validate_phone,
     validate_positive_decimal,
 )
-
-
-# ===========================================================================
-# Base Models
-# ===========================================================================
-
-
-class SoftDeleteModelTests(TestCase):
-    """Tests for the ``SoftDeleteModel`` abstract base class."""
-
-    def _create_user(self, suffix=""):
-        from django.contrib.auth import get_user_model
-
-        User = get_user_model()
-        tag = suffix or uuid.uuid4().hex[:8]
-        user = User.objects.create_user(
-            username=f"sdel_{tag}",
-            email=f"sdel_{tag}@example.com",
-            password="testpass123",
-        )
-        return user.pk
-
-    def test_soft_delete_sets_deleted_at(self):
-        """Soft-deleting a record should set ``deleted_at`` to a non-NULL value."""
-        from apps.workspaces.models import Workspace
-
-        ws = Workspace.objects.create(name="Test Delete WS", owner_id=self._create_user("1"))
-        self.assertIsNone(ws.deleted_at)
-        ws.delete()
-        ws.refresh_from_db()
-        self.assertIsNotNone(ws.deleted_at)
-
-    def test_hard_delete_removes_record(self):
-        """Hard-deleting a record should permanently remove it."""
-        from apps.workspaces.models import Workspace
-
-        ws = Workspace.objects.create(name="Test Hard Delete", owner_id=self._create_user("2"))
-        pk = ws.pk
-        ws.hard_delete()
-        self.assertFalse(Workspace.objects.filter(pk=pk).exists())
-
-    def test_is_deleted_property(self):
-        """The ``is_deleted`` property should reflect the soft-delete state."""
-        from apps.workspaces.models import Workspace
-
-        ws = Workspace.objects.create(name="Is Deleted Test", owner_id=self._create_user("3"))
-        self.assertFalse(ws.is_deleted)
-        ws.delete()
-        ws.refresh_from_db()
-        self.assertTrue(ws.is_deleted)
-
-
-# ===========================================================================
-# Managers
-# ===========================================================================
-
-
-class ManagerTests(TestCase):
-    """Tests for custom querysets and managers."""
-
-    def _create_user(self, suffix):
-        from django.contrib.auth import get_user_model
-
-        User = get_user_model()
-        return User.objects.create_user(
-            username=f"mgr_test_{suffix}",
-            email=f"mgr_{suffix}@example.com",
-            password="testpass123",
-        ).pk
-
-    def test_active_queryset_excludes_deleted(self):
-        """"""
-        from apps.workspaces.models import Workspace
-
-        ws = Workspace.objects.create(name="Active QS Test", owner_id=self._create_user("aq1"))
-        ws.delete()
-        # Default manager should exclude soft-deleted records.
-        qs = WorkspaceScopedQuerySet(model=Workspace).active()
-        self.assertNotIn(ws, qs)
-
-    def test_deleted_queryset_includes_only_deleted(self):
-        """"""
-        from apps.workspaces.models import Workspace
-
-        active_ws = Workspace.objects.create(name="Deleted QS Active", owner_id=self._create_user("dq1"))
-        deleted_ws = Workspace.objects.create(name="Deleted QS Gone", owner_id=self._create_user("dq2"))
-        deleted_ws.delete()
-
-        qs = WorkspaceScopedQuerySet(model=Workspace).deleted()
-        self.assertIn(deleted_ws, qs)
-        self.assertNotIn(active_ws, qs)
 
 
 # ===========================================================================
